@@ -228,11 +228,19 @@ Object {
       "Type": "AWS::EC2::SecurityGroupIngress",
     },
     "ValheimWorldValheimServiceCC61ABC6": Object {
+      "DependsOn": Array [
+        "ValheimWorldValheimTaskDefinitionTaskRole0935CE1E",
+      ],
       "Properties": Object {
         "Cluster": Object {
           "Ref": "ValheimWorldValheimClusterE58CB7BF",
         },
         "DeploymentConfiguration": Object {
+          "Alarms": Object {
+            "AlarmNames": Array [],
+            "Enable": false,
+            "Rollback": false,
+          },
           "MaximumPercent": 200,
           "MinimumHealthyPercent": 50,
         },
@@ -266,6 +274,9 @@ Object {
       "Type": "AWS::ECS::Service",
     },
     "ValheimWorldValheimServiceSecurityGroupC4193CDD": Object {
+      "DependsOn": Array [
+        "ValheimWorldValheimTaskDefinitionTaskRole0935CE1E",
+      ],
       "Properties": Object {
         "GroupDescription": "Default/ValheimWorld/ValheimService/SecurityGroup",
         "SecurityGroupEgress": Array [
@@ -291,6 +302,9 @@ Object {
       "Type": "AWS::EC2::SecurityGroup",
     },
     "ValheimWorldValheimServiceSecurityGroupfromValheimWorldValheimSaveDataEFSEfsSecurityGroup9E6C33642049DC54E36A": Object {
+      "DependsOn": Array [
+        "ValheimWorldValheimTaskDefinitionTaskRole0935CE1E",
+      ],
       "Properties": Object {
         "Description": "from ValheimWorldValheimSaveDataEFSEfsSecurityGroup9E6C3364:2049",
         "FromPort": 2049,
