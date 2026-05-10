@@ -351,6 +351,7 @@ Object {
               },
             ],
             "Name": "ValheimContainer",
+            "StopTimeout": 60,
           },
         ],
         "Cpu": "1024",

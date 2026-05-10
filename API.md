@@ -108,6 +108,107 @@ public readonly handler: Function;
 ---
 
 
+### IdleMonitor <a name="IdleMonitor" id="cdk-valheim-discord.IdleMonitor"></a>
+
+Scheduled Lambda that polls the Valheim server's Steam A2S query port and scales the Fargate service to 0 after a configurable idle window.
+
+State lives in a single SSM Parameter (`last_active_at` as a Unix epoch).
+Failure modes (timeouts, parse errors) are treated as inconclusive and leave
+state untouched — the bias is toward NOT stopping a server that might still
+be active.
+
+#### Initializers <a name="Initializers" id="cdk-valheim-discord.IdleMonitor.Initializer"></a>
+
+```typescript
+import { IdleMonitor } from 'cdk-valheim-discord'
+
+new IdleMonitor(scope: Construct, id: string, props: IdleMonitorProps)
+```
+
+| **Name** | **Type** | **Description** |
+| --- | --- | --- |
+| <code><a href="#cdk-valheim-discord.IdleMonitor.Initializer.parameter.scope">scope</a></code> | <code>constructs.Construct</code> | *No description.* |
+| <code><a href="#cdk-valheim-discord.IdleMonitor.Initializer.parameter.id">id</a></code> | <code>string</code> | *No description.* |
+| <code><a href="#cdk-valheim-discord.IdleMonitor.Initializer.parameter.props">props</a></code> | <code><a href="#cdk-valheim-discord.IdleMonitorProps">IdleMonitorProps</a></code> | *No description.* |
+
+---
+
+##### `scope`<sup>Required</sup> <a name="scope" id="cdk-valheim-discord.IdleMonitor.Initializer.parameter.scope"></a>
+
+- *Type:* constructs.Construct
+
+---
+
+##### `id`<sup>Required</sup> <a name="id" id="cdk-valheim-discord.IdleMonitor.Initializer.parameter.id"></a>
+
+- *Type:* string
+
+---
+
+##### `props`<sup>Required</sup> <a name="props" id="cdk-valheim-discord.IdleMonitor.Initializer.parameter.props"></a>
+
+- *Type:* <a href="#cdk-valheim-discord.IdleMonitorProps">IdleMonitorProps</a>
+
+---
+
+#### Methods <a name="Methods" id="Methods"></a>
+
+| **Name** | **Description** |
+| --- | --- |
+| <code><a href="#cdk-valheim-discord.IdleMonitor.toString">toString</a></code> | Returns a string representation of this construct. |
+
+---
+
+##### `toString` <a name="toString" id="cdk-valheim-discord.IdleMonitor.toString"></a>
+
+```typescript
+public toString(): string
+```
+
+Returns a string representation of this construct.
+
+
+#### Properties <a name="Properties" id="Properties"></a>
+
+| **Name** | **Type** | **Description** |
+| --- | --- | --- |
+| <code><a href="#cdk-valheim-discord.IdleMonitor.property.handler">handler</a></code> | <code>aws-cdk-lib.aws_lambda.Function</code> | *No description.* |
+| <code><a href="#cdk-valheim-discord.IdleMonitor.property.rule">rule</a></code> | <code>aws-cdk-lib.aws_events.Rule</code> | *No description.* |
+| <code><a href="#cdk-valheim-discord.IdleMonitor.property.stateParameter">stateParameter</a></code> | <code>aws-cdk-lib.aws_ssm.IStringParameter</code> | *No description.* |
+
+---
+
+##### `handler`<sup>Required</sup> <a name="handler" id="cdk-valheim-discord.IdleMonitor.property.handler"></a>
+
+```typescript
+public readonly handler: Function;
+```
+
+- *Type:* aws-cdk-lib.aws_lambda.Function
+
+---
+
+##### `rule`<sup>Required</sup> <a name="rule" id="cdk-valheim-discord.IdleMonitor.property.rule"></a>
+
+```typescript
+public readonly rule: Rule;
+```
+
+- *Type:* aws-cdk-lib.aws_events.Rule
+
+---
+
+##### `stateParameter`<sup>Required</sup> <a name="stateParameter" id="cdk-valheim-discord.IdleMonitor.property.stateParameter"></a>
+
+```typescript
+public readonly stateParameter: IStringParameter;
+```
+
+- *Type:* aws-cdk-lib.aws_ssm.IStringParameter
+
+---
+
+
 ### Route53DnsUpdater <a name="Route53DnsUpdater" id="cdk-valheim-discord.Route53DnsUpdater"></a>
 
 Watches ECS task state changes on the given cluster;
@@ -435,6 +536,8 @@ const discordValheimControllerProps: DiscordValheimControllerProps = { ... }
 | <code><a href="#cdk-valheim-discord.DiscordValheimControllerProps.property.service">service</a></code> | <code>aws-cdk-lib.aws_ecs.FargateService</code> | The Valheim Fargate service to start/stop via Discord slash commands. |
 | <code><a href="#cdk-valheim-discord.DiscordValheimControllerProps.property.lambdaTimeout">lambdaTimeout</a></code> | <code>aws-cdk-lib.Duration</code> | Lambda timeout. |
 | <code><a href="#cdk-valheim-discord.DiscordValheimControllerProps.property.startDesiredCount">startDesiredCount</a></code> | <code>number</code> | Desired Fargate task count when a user runs `/vh start`. |
+| <code><a href="#cdk-valheim-discord.DiscordValheimControllerProps.property.valheimHostname">valheimHostname</a></code> | <code>string</code> | Public hostname players connect to (e.g. `valheim.chipsgaming.click`). When set, `/vh status` includes `Connect: <hostname>:<port>` in the reply. |
+| <code><a href="#cdk-valheim-discord.DiscordValheimControllerProps.property.valheimPort">valheimPort</a></code> | <code>number</code> | Valheim game port surfaced in the connect string. |
 
 ---
 
@@ -491,6 +594,146 @@ public readonly startDesiredCount: number;
 - *Default:* 1
 
 Desired Fargate task count when a user runs `/vh start`.
+
+---
+
+##### `valheimHostname`<sup>Optional</sup> <a name="valheimHostname" id="cdk-valheim-discord.DiscordValheimControllerProps.property.valheimHostname"></a>
+
+```typescript
+public readonly valheimHostname: string;
+```
+
+- *Type:* string
+- *Default:* no connect string shown
+
+Public hostname players connect to (e.g. `valheim.chipsgaming.click`). When set, `/vh status` includes `Connect: <hostname>:<port>` in the reply.
+
+---
+
+##### `valheimPort`<sup>Optional</sup> <a name="valheimPort" id="cdk-valheim-discord.DiscordValheimControllerProps.property.valheimPort"></a>
+
+```typescript
+public readonly valheimPort: number;
+```
+
+- *Type:* number
+- *Default:* 2456
+
+Valheim game port surfaced in the connect string.
+
+---
+
+### IdleMonitorProps <a name="IdleMonitorProps" id="cdk-valheim-discord.IdleMonitorProps"></a>
+
+Properties for {@link IdleMonitor}.
+
+#### Initializer <a name="Initializer" id="cdk-valheim-discord.IdleMonitorProps.Initializer"></a>
+
+```typescript
+import { IdleMonitorProps } from 'cdk-valheim-discord'
+
+const idleMonitorProps: IdleMonitorProps = { ... }
+```
+
+#### Properties <a name="Properties" id="Properties"></a>
+
+| **Name** | **Type** | **Description** |
+| --- | --- | --- |
+| <code><a href="#cdk-valheim-discord.IdleMonitorProps.property.hostname">hostname</a></code> | <code>string</code> | Public hostname the Lambda queries for player count (e.g. `valheim.chipsgaming.click`). |
+| <code><a href="#cdk-valheim-discord.IdleMonitorProps.property.service">service</a></code> | <code>aws-cdk-lib.aws_ecs.FargateService</code> | The Fargate service to scale to 0 when the server goes idle. |
+| <code><a href="#cdk-valheim-discord.IdleMonitorProps.property.checkInterval">checkInterval</a></code> | <code>aws-cdk-lib.Duration</code> | How often the monitor runs. |
+| <code><a href="#cdk-valheim-discord.IdleMonitorProps.property.gracePeriod">gracePeriod</a></code> | <code>aws-cdk-lib.Duration</code> | Minimum time after a task starts before auto-stop may fire. |
+| <code><a href="#cdk-valheim-discord.IdleMonitorProps.property.idleTimeout">idleTimeout</a></code> | <code>aws-cdk-lib.Duration</code> | Duration of zero-player observations before the server is stopped. |
+| <code><a href="#cdk-valheim-discord.IdleMonitorProps.property.queryPort">queryPort</a></code> | <code>number</code> | UDP port for Steam A2S_INFO queries. |
+
+---
+
+##### `hostname`<sup>Required</sup> <a name="hostname" id="cdk-valheim-discord.IdleMonitorProps.property.hostname"></a>
+
+```typescript
+public readonly hostname: string;
+```
+
+- *Type:* string
+
+Public hostname the Lambda queries for player count (e.g. `valheim.chipsgaming.click`).
+
+This must resolve to the running task's public IP — the DNS updater in this
+stack already maintains that record on each task start.
+
+---
+
+##### `service`<sup>Required</sup> <a name="service" id="cdk-valheim-discord.IdleMonitorProps.property.service"></a>
+
+```typescript
+public readonly service: FargateService;
+```
+
+- *Type:* aws-cdk-lib.aws_ecs.FargateService
+
+The Fargate service to scale to 0 when the server goes idle.
+
+---
+
+##### `checkInterval`<sup>Optional</sup> <a name="checkInterval" id="cdk-valheim-discord.IdleMonitorProps.property.checkInterval"></a>
+
+```typescript
+public readonly checkInterval: Duration;
+```
+
+- *Type:* aws-cdk-lib.Duration
+- *Default:* Duration.minutes(5)
+
+How often the monitor runs.
+
+Smaller values = tighter idle detection but
+more Lambda invocations (all well within the free tier).
+
+---
+
+##### `gracePeriod`<sup>Optional</sup> <a name="gracePeriod" id="cdk-valheim-discord.IdleMonitorProps.property.gracePeriod"></a>
+
+```typescript
+public readonly gracePeriod: Duration;
+```
+
+- *Type:* aws-cdk-lib.Duration
+- *Default:* Duration.minutes(10)
+
+Minimum time after a task starts before auto-stop may fire.
+
+Prevents the
+monitor from killing a server that just booted and hasn't had time for
+players to connect yet.
+
+---
+
+##### `idleTimeout`<sup>Optional</sup> <a name="idleTimeout" id="cdk-valheim-discord.IdleMonitorProps.property.idleTimeout"></a>
+
+```typescript
+public readonly idleTimeout: Duration;
+```
+
+- *Type:* aws-cdk-lib.Duration
+- *Default:* Duration.minutes(30)
+
+Duration of zero-player observations before the server is stopped.
+
+---
+
+##### `queryPort`<sup>Optional</sup> <a name="queryPort" id="cdk-valheim-discord.IdleMonitorProps.property.queryPort"></a>
+
+```typescript
+public readonly queryPort: number;
+```
+
+- *Type:* number
+- *Default:* 2457
+
+UDP port for Steam A2S_INFO queries.
+
+For Valheim (lloesche image) this is 2457;
+2456 is the game/join port and will NOT answer A2S queries.
 
 ---
 

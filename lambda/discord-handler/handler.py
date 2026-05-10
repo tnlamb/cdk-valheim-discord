@@ -12,9 +12,11 @@ Flow:
 The slash command shape (registered by scripts/register_bot.py):
   /vh <status|start|stop>
 """
+import base64
 import json
 import logging
 import os
+from datetime import datetime, timezone
 
 import boto3
 from nacl.exceptions import BadSignatureError
@@ -24,6 +26,11 @@ APPLICATION_PUBLIC_KEY = os.environ["APPLICATION_PUBLIC_KEY"]
 ECS_CLUSTER_ARN = os.environ["ECS_CLUSTER_ARN"]
 ECS_SERVICE_NAME = os.environ["ECS_SERVICE_NAME"]
 START_DESIRED_COUNT = int(os.environ.get("START_DESIRED_COUNT", "1"))
+# Public hostname players connect to (e.g. "valheim.chipsgaming.click").
+# Used to build the connect string shown in /vh status replies.
+VALHEIM_HOSTNAME = os.environ.get("VALHEIM_HOSTNAME", "")
+# Valheim default game port. 2456 UDP is the join port; query is 2457.
+VALHEIM_PORT = int(os.environ.get("VALHEIM_PORT", "2456"))
 
 # Discord interaction types
 PING = 1
@@ -64,6 +71,44 @@ def _reply(content: str) -> dict:
     }
 
 
+def _format_uptime(seconds: int) -> str:
+    """Human-readable uptime, e.g. '45s', '7m', '2h 14m', '3d 5h'."""
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, _ = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m"
+    hours, m = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h {m}m"
+    days, h = divmod(hours, 24)
+    return f"{days}d {h}h"
+
+
+def _running_task_uptime_seconds() -> int | None:
+    """Return uptime (seconds) of the currently running task, or None if none found."""
+    arns = _ecs.list_tasks(
+        cluster=ECS_CLUSTER_ARN,
+        serviceName=ECS_SERVICE_NAME,
+        desiredStatus="RUNNING",
+    ).get("taskArns", [])
+    if not arns:
+        return None
+    tasks = _ecs.describe_tasks(cluster=ECS_CLUSTER_ARN, tasks=arns).get("tasks", [])
+    started_ats = [t["startedAt"] for t in tasks if t.get("startedAt")]
+    if not started_ats:
+        return None
+    started = min(started_ats)  # oldest running task = actual server uptime
+    return int((datetime.now(timezone.utc) - started).total_seconds())
+
+
+def _connect_string() -> str:
+    """Return ' Connect: host:port' or '' if hostname not configured."""
+    if not VALHEIM_HOSTNAME:
+        return ""
+    return f" Connect: `{VALHEIM_HOSTNAME}:{VALHEIM_PORT}`"
+
+
 def _status() -> str:
     resp = _ecs.describe_services(
         cluster=ECS_CLUSTER_ARN,
@@ -76,7 +121,9 @@ def _status() -> str:
     if desired == 0 and running == 0:
         return "🛑 Server is OFF. Use `/vh start` to bring it up."
     if running == desired and pending == 0:
-        return f"✅ Server is ONLINE (running: {running}). Connect via the DNS name."
+        uptime_s = _running_task_uptime_seconds()
+        uptime_str = f" — up {_format_uptime(uptime_s)}" if uptime_s is not None else ""
+        return f"✅ Server is ONLINE{uptime_str}.{_connect_string()}"
     return f"⏳ Server is transitioning — desired: {desired}, running: {running}, pending: {pending}."
 
 
@@ -98,7 +145,7 @@ def _stop() -> str:
         service=ECS_SERVICE_NAME,
         desiredCount=0,
     )
-    return "🔴 Stopping the server. Your save is preserved on EFS."
+    return "🔴 Stopping the server. Game progress has been saved."
 
 
 def _dispatch(interaction: dict) -> dict:
@@ -122,32 +169,41 @@ def _dispatch(interaction: dict) -> dict:
 
 def handler(event, _context):
     """
-    Lambda entry point. `event` comes from the VTL template in API Gateway:
-      {"body": <parsed-json>, "headers": {...}}
+    Lambda entry point (API Gateway Proxy integration).
 
-    The Discord signature is verified over the RAW body bytes + timestamp, so we
-    re-serialize the parsed JSON exactly as received. We rely on Python's default
-    separators here; Discord's reference servers do the same.
+    Discord signs the RAW request body bytes concatenated with the timestamp.
+    We must verify against those exact bytes — do NOT parse-then-re-serialize
+    the body (key order and whitespace won't match, and verification fails).
     """
     logger.info("Event keys: %s", list(event.keys()))
     headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
-    body = event.get("body") or {}
-    # Re-serialize body for signature check. API Gateway parsed it into a dict;
-    # we need the exact bytes Discord signed. Using compact separators matches
-    # Discord's canonical form.
-    raw_body = json.dumps(body, separators=(",", ":"))
+    raw_body = event.get("body") or ""
+    if event.get("isBase64Encoded"):
+        raw_body = base64.b64decode(raw_body).decode("utf-8")
 
     signature = headers.get("x-signature-ed25519")
     timestamp = headers.get("x-signature-timestamp")
     if not signature or not timestamp or not _verify_signature(raw_body, signature, timestamp):
         logger.warning("Signature verification failed")
-        # 401 response — API Gateway maps this via integrationResponses selectionPattern.
         return {"statusCode": 401, "body": "invalid request signature"}
+
+    try:
+        body = json.loads(raw_body)
+    except json.JSONDecodeError:
+        logger.warning("Body was not valid JSON after signature check passed")
+        return {"statusCode": 400, "body": "invalid json"}
 
     interaction_type = body.get("type")
     if interaction_type == PING:
-        return {"type": PONG}
-    if interaction_type == APPLICATION_COMMAND:
-        return _dispatch(body)
-    logger.warning("Unhandled interaction type: %s", interaction_type)
-    return _reply("Unsupported interaction.")
+        response = {"type": PONG}
+    elif interaction_type == APPLICATION_COMMAND:
+        response = _dispatch(body)
+    else:
+        logger.warning("Unhandled interaction type: %s", interaction_type)
+        response = _reply("Unsupported interaction.")
+
+    return {
+        "statusCode": 200,
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps(response),
+    }

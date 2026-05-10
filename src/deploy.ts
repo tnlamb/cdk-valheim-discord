@@ -30,6 +30,7 @@ import {
 import { Construct } from 'constructs';
 import { DiscordValheimController } from './discord-controller';
 import { Route53DnsUpdater } from './dns-updater';
+import { IdleMonitor } from './idle-monitor';
 import { SaveImport } from './save-import';
 import { ValheimWorld } from './valheim';
 
@@ -68,6 +69,7 @@ class ValheimDiscordStack extends Stack {
       applicationPublicKey: props.applicationPublicKey,
       startDesiredCount: 1,
       lambdaTimeout: Duration.seconds(10),
+      valheimHostname: `${props.subdomain}.${props.domainName}`,
     });
 
     // 3) Route53 dynamic DNS updater.
@@ -88,6 +90,14 @@ class ValheimDiscordStack extends Stack {
     new SaveImport(this, 'SaveImport', {
       cluster: valheim.service.cluster,
       fileSystem: valheim.fileSystem,
+    });
+
+    // 5) Auto-stop when idle. Polls the server's Steam A2S query port every
+    //    5 minutes and scales the service to 0 after 30 minutes of zero players
+    //    (with a 10-minute post-start grace window).
+    new IdleMonitor(this, 'IdleMonitor', {
+      service: valheim.service,
+      hostname: `${props.subdomain}.${props.domainName}`,
     });
   }
 }

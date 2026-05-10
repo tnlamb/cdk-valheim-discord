@@ -293,6 +293,9 @@ export class ValheimWorld extends Construct {
         logRetention: logs.RetentionDays.ONE_DAY,
       }),
       environment: props?.environment,
+      // Give the container time to trap SIGTERM, flush a final world save to EFS,
+      // and exit cleanly before Fargate SIGKILLs it. Default is 30s.
+      stopTimeout: Duration.seconds(60),
     });
     containerDefinition.addMountPoints(
       {

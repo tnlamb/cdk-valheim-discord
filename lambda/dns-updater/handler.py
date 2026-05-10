@@ -29,14 +29,18 @@ def _extract_eni_id(detail: dict) -> str | None:
     """
     ECS task attachments look like:
         "attachments": [
-          {"type": "ElasticNetworkInterface", "details": [
+          {"type": "eni", "details": [
             {"name": "networkInterfaceId", "value": "eni-abc123"},
             ...
           ]}
         ]
+
+    AWS ECS Task State Change events use type="eni" (not "ElasticNetworkInterface"
+    as the docs sometimes suggest). Accept both to be resilient to any future change.
     """
+    eni_types = {"eni", "ElasticNetworkInterface"}
     for attachment in detail.get("attachments", []):
-        if attachment.get("type") != "ElasticNetworkInterface":
+        if attachment.get("type") not in eni_types:
             continue
         for entry in attachment.get("details", []):
             if entry.get("name") == "networkInterfaceId":

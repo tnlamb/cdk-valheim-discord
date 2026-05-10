@@ -41,6 +41,21 @@ export interface DiscordValheimControllerProps {
    * @default Duration.seconds(10)
    */
   readonly lambdaTimeout?: Duration;
+
+  /**
+   * Public hostname players connect to (e.g. `valheim.chipsgaming.click`).
+   * When set, `/vh status` includes `Connect: <hostname>:<port>` in the reply.
+   *
+   * @default - no connect string shown
+   */
+  readonly valheimHostname?: string;
+
+  /**
+   * Valheim game port surfaced in the connect string.
+   *
+   * @default 2456
+   */
+  readonly valheimPort?: number;
 }
 
 /**
@@ -94,6 +109,8 @@ export class DiscordValheimController extends Construct {
         ECS_CLUSTER_ARN: service.cluster.clusterArn,
         ECS_SERVICE_NAME: service.serviceName,
         START_DESIRED_COUNT: startDesiredCount.toString(),
+        VALHEIM_HOSTNAME: props.valheimHostname ?? '',
+        VALHEIM_PORT: (props.valheimPort ?? 2456).toString(),
       },
     });
 
@@ -103,9 +120,21 @@ export class DiscordValheimController extends Construct {
       resources: [service.serviceArn],
     }));
 
-    // API Gateway REST API with a VTL request template that forwards
-    // Discord's Ed25519 signature headers (X-Signature-Ed25519, X-Signature-Timestamp)
-    // into the Lambda event body. Without this, signature verification fails.
+    // List/Describe tasks for uptime reporting. These actions don't support
+    // per-service resource ARNs, so scope via the ecs:cluster condition.
+    this.handler.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['ecs:ListTasks', 'ecs:DescribeTasks'],
+      resources: ['*'],
+      conditions: {
+        ArnEquals: { 'ecs:cluster': service.cluster.clusterArn },
+      },
+    }));
+
+    // API Gateway REST API using Lambda Proxy integration. Discord signs the
+    // raw request body bytes, so the Lambda MUST receive them untouched — any
+    // VTL re-serialization (e.g. $input.json("$")) changes key order/whitespace
+    // and breaks ed25519 signature verification. Proxy integration also forwards
+    // the X-Signature-Ed25519 / X-Signature-Timestamp headers natively.
     this.api = new apigateway.RestApi(this, 'Api', {
       restApiName: `${id}-discord-interactions`,
       deployOptions: {
@@ -114,26 +143,10 @@ export class DiscordValheimController extends Construct {
       },
     });
 
-    const requestTemplate = `{
-  "body": $input.json("$"),
-  "headers": {
-    #foreach($param in $input.params().header.keySet())
-    "$param": "$util.escapeJavaScript($input.params().header.get($param))"#if($foreach.hasNext),#end
-    #end
-  }
-}`;
-
     const discordResource = this.api.root.addResource('discord');
     discordResource.addMethod('POST', new apigateway.LambdaIntegration(this.handler, {
-      proxy: false,
-      requestTemplates: { 'application/json': requestTemplate },
-      integrationResponses: [{ statusCode: '200' }, {
-        statusCode: '401',
-        selectionPattern: '.*"statusCode":401.*',
-      }],
-    }), {
-      methodResponses: [{ statusCode: '200' }, { statusCode: '401' }],
-    });
+      proxy: true,
+    }));
 
     this.discordEndpointUrl = `${this.api.url}discord`;
 
