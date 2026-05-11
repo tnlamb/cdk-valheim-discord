@@ -12,6 +12,8 @@
  * Required env vars at deploy time:
  *   DISCORD_APPLICATION_PUBLIC_KEY  — hex public key from Discord dev portal → General Information
  *   SERVER_PASSWORD                 — min 5 chars (Valheim requirement)
+ *   DISCORD_BOT_TOKEN               — bot token from Discord dev portal → Bot tab
+ *   DISCORD_CHANNEL_ID              — channel ID where "server ready" notifications post
  *
  * Optional env vars (with defaults):
  *   SERVER_NAME      = "Chips Gaming"
@@ -31,6 +33,7 @@ import { Construct } from 'constructs';
 import { DiscordValheimController } from './discord-controller';
 import { Route53DnsUpdater } from './dns-updater';
 import { IdleMonitor } from './idle-monitor';
+import { ReadyNotifier } from './ready-notifier';
 import { SaveImport } from './save-import';
 import { ValheimWorld } from './valheim';
 
@@ -41,6 +44,8 @@ interface ValheimDiscordStackProps extends StackProps {
   readonly serverPassword: string;
   readonly domainName: string;
   readonly subdomain: string;
+  readonly discordBotToken: string;
+  readonly discordChannelId: string;
 }
 
 class ValheimDiscordStack extends Stack {
@@ -99,6 +104,16 @@ class ValheimDiscordStack extends Stack {
       service: valheim.service,
       hostname: `${props.subdomain}.${props.domainName}`,
     });
+
+    // 6) Server-ready notifier. On every task → RUNNING transition, poll A2S
+    //    until the game engine is truly listening, then post "Server is ready!"
+    //    to the configured Discord channel via the bot API.
+    new ReadyNotifier(this, 'ReadyNotifier', {
+      service: valheim.service,
+      hostname: `${props.subdomain}.${props.domainName}`,
+      discordBotToken: props.discordBotToken,
+      discordChannelId: props.discordChannelId,
+    });
   }
 }
 
@@ -122,5 +137,7 @@ new ValheimDiscordStack(app, 'ValheimDiscordStack', {
   serverPassword: requireEnv('SERVER_PASSWORD'),
   domainName: process.env.DOMAIN_NAME ?? 'chipsgaming.click',
   subdomain: process.env.SUBDOMAIN ?? 'valheim',
+  discordBotToken: requireEnv('DISCORD_BOT_TOKEN'),
+  discordChannelId: requireEnv('DISCORD_CHANNEL_ID'),
 });
 app.synth();

@@ -209,6 +209,96 @@ public readonly stateParameter: IStringParameter;
 ---
 
 
+### ReadyNotifier <a name="ReadyNotifier" id="cdk-valheim-discord.ReadyNotifier"></a>
+
+EventBridge + Lambda: on every Valheim Fargate task transition to RUNNING, poll A2S until the server answers (i.e. the world finished loading and the game port is open) and post "Server is ready!" to a Discord channel via the bot API.
+
+Note on task filtering: ECS fires Task State Change events for every task
+in the cluster — including save-import one-shots. The EventBridge rule
+scopes to tasks in our valheim-world service via the `group` field which
+ECS populates as `service:<serviceName>` for service-spawned tasks.
+
+#### Initializers <a name="Initializers" id="cdk-valheim-discord.ReadyNotifier.Initializer"></a>
+
+```typescript
+import { ReadyNotifier } from 'cdk-valheim-discord'
+
+new ReadyNotifier(scope: Construct, id: string, props: ReadyNotifierProps)
+```
+
+| **Name** | **Type** | **Description** |
+| --- | --- | --- |
+| <code><a href="#cdk-valheim-discord.ReadyNotifier.Initializer.parameter.scope">scope</a></code> | <code>constructs.Construct</code> | *No description.* |
+| <code><a href="#cdk-valheim-discord.ReadyNotifier.Initializer.parameter.id">id</a></code> | <code>string</code> | *No description.* |
+| <code><a href="#cdk-valheim-discord.ReadyNotifier.Initializer.parameter.props">props</a></code> | <code><a href="#cdk-valheim-discord.ReadyNotifierProps">ReadyNotifierProps</a></code> | *No description.* |
+
+---
+
+##### `scope`<sup>Required</sup> <a name="scope" id="cdk-valheim-discord.ReadyNotifier.Initializer.parameter.scope"></a>
+
+- *Type:* constructs.Construct
+
+---
+
+##### `id`<sup>Required</sup> <a name="id" id="cdk-valheim-discord.ReadyNotifier.Initializer.parameter.id"></a>
+
+- *Type:* string
+
+---
+
+##### `props`<sup>Required</sup> <a name="props" id="cdk-valheim-discord.ReadyNotifier.Initializer.parameter.props"></a>
+
+- *Type:* <a href="#cdk-valheim-discord.ReadyNotifierProps">ReadyNotifierProps</a>
+
+---
+
+#### Methods <a name="Methods" id="Methods"></a>
+
+| **Name** | **Description** |
+| --- | --- |
+| <code><a href="#cdk-valheim-discord.ReadyNotifier.toString">toString</a></code> | Returns a string representation of this construct. |
+
+---
+
+##### `toString` <a name="toString" id="cdk-valheim-discord.ReadyNotifier.toString"></a>
+
+```typescript
+public toString(): string
+```
+
+Returns a string representation of this construct.
+
+
+#### Properties <a name="Properties" id="Properties"></a>
+
+| **Name** | **Type** | **Description** |
+| --- | --- | --- |
+| <code><a href="#cdk-valheim-discord.ReadyNotifier.property.handler">handler</a></code> | <code>aws-cdk-lib.aws_lambda.Function</code> | *No description.* |
+| <code><a href="#cdk-valheim-discord.ReadyNotifier.property.rule">rule</a></code> | <code>aws-cdk-lib.aws_events.Rule</code> | *No description.* |
+
+---
+
+##### `handler`<sup>Required</sup> <a name="handler" id="cdk-valheim-discord.ReadyNotifier.property.handler"></a>
+
+```typescript
+public readonly handler: Function;
+```
+
+- *Type:* aws-cdk-lib.aws_lambda.Function
+
+---
+
+##### `rule`<sup>Required</sup> <a name="rule" id="cdk-valheim-discord.ReadyNotifier.property.rule"></a>
+
+```typescript
+public readonly rule: Rule;
+```
+
+- *Type:* aws-cdk-lib.aws_events.Rule
+
+---
+
+
 ### Route53DnsUpdater <a name="Route53DnsUpdater" id="cdk-valheim-discord.Route53DnsUpdater"></a>
 
 Watches ECS task state changes on the given cluster;
@@ -538,6 +628,7 @@ const discordValheimControllerProps: DiscordValheimControllerProps = { ... }
 | <code><a href="#cdk-valheim-discord.DiscordValheimControllerProps.property.startDesiredCount">startDesiredCount</a></code> | <code>number</code> | Desired Fargate task count when a user runs `/vh start`. |
 | <code><a href="#cdk-valheim-discord.DiscordValheimControllerProps.property.valheimHostname">valheimHostname</a></code> | <code>string</code> | Public hostname players connect to (e.g. `valheim.chipsgaming.click`). When set, `/vh status` includes `Connect: <hostname>:<port>` in the reply. |
 | <code><a href="#cdk-valheim-discord.DiscordValheimControllerProps.property.valheimPort">valheimPort</a></code> | <code>number</code> | Valheim game port surfaced in the connect string. |
+| <code><a href="#cdk-valheim-discord.DiscordValheimControllerProps.property.valheimQueryPort">valheimQueryPort</a></code> | <code>number</code> | Valheim Steam A2S query port. |
 
 ---
 
@@ -620,6 +711,22 @@ public readonly valheimPort: number;
 - *Default:* 2456
 
 Valheim game port surfaced in the connect string.
+
+---
+
+##### `valheimQueryPort`<sup>Optional</sup> <a name="valheimQueryPort" id="cdk-valheim-discord.DiscordValheimControllerProps.property.valheimQueryPort"></a>
+
+```typescript
+public readonly valheimQueryPort: number;
+```
+
+- *Type:* number
+- *Default:* 2457
+
+Valheim Steam A2S query port.
+
+`/vh status` probes this port to confirm
+the game engine has finished loading the world before reporting ONLINE.
 
 ---
 
@@ -734,6 +841,131 @@ UDP port for Steam A2S_INFO queries.
 
 For Valheim (lloesche image) this is 2457;
 2456 is the game/join port and will NOT answer A2S queries.
+
+---
+
+### ReadyNotifierProps <a name="ReadyNotifierProps" id="cdk-valheim-discord.ReadyNotifierProps"></a>
+
+Properties for {@link ReadyNotifier}.
+
+#### Initializer <a name="Initializer" id="cdk-valheim-discord.ReadyNotifierProps.Initializer"></a>
+
+```typescript
+import { ReadyNotifierProps } from 'cdk-valheim-discord'
+
+const readyNotifierProps: ReadyNotifierProps = { ... }
+```
+
+#### Properties <a name="Properties" id="Properties"></a>
+
+| **Name** | **Type** | **Description** |
+| --- | --- | --- |
+| <code><a href="#cdk-valheim-discord.ReadyNotifierProps.property.discordBotToken">discordBotToken</a></code> | <code>string</code> | Discord bot token used to post messages as the bot. |
+| <code><a href="#cdk-valheim-discord.ReadyNotifierProps.property.discordChannelId">discordChannelId</a></code> | <code>string</code> | Discord channel ID where the ready message will be posted. |
+| <code><a href="#cdk-valheim-discord.ReadyNotifierProps.property.hostname">hostname</a></code> | <code>string</code> | Public hostname used for the A2S probe and the "Connect:" string in the ready message. |
+| <code><a href="#cdk-valheim-discord.ReadyNotifierProps.property.service">service</a></code> | <code>aws-cdk-lib.aws_ecs.FargateService</code> | The Valheim Fargate service whose task start events we watch. |
+| <code><a href="#cdk-valheim-discord.ReadyNotifierProps.property.pollInterval">pollInterval</a></code> | <code>aws-cdk-lib.Duration</code> | How often the Lambda probes A2S while waiting. |
+| <code><a href="#cdk-valheim-discord.ReadyNotifierProps.property.readyTimeout">readyTimeout</a></code> | <code>aws-cdk-lib.Duration</code> | Total time to wait for A2S to answer before giving up and posting a warning. |
+| <code><a href="#cdk-valheim-discord.ReadyNotifierProps.property.valheimQueryPort">valheimQueryPort</a></code> | <code>number</code> | UDP port used for A2S probes. |
+
+---
+
+##### `discordBotToken`<sup>Required</sup> <a name="discordBotToken" id="cdk-valheim-discord.ReadyNotifierProps.property.discordBotToken"></a>
+
+```typescript
+public readonly discordBotToken: string;
+```
+
+- *Type:* string
+
+Discord bot token used to post messages as the bot.
+
+Must be set to the
+token from the Discord developer portal → Bot tab.
+
+This is a secret. Store it in an env var passed to `cdk deploy`; it will
+end up as a Lambda environment variable (encrypted at rest by default).
+For stronger isolation, swap to Secrets Manager later.
+
+---
+
+##### `discordChannelId`<sup>Required</sup> <a name="discordChannelId" id="cdk-valheim-discord.ReadyNotifierProps.property.discordChannelId"></a>
+
+```typescript
+public readonly discordChannelId: string;
+```
+
+- *Type:* string
+
+Discord channel ID where the ready message will be posted.
+
+Enable
+Developer Mode in Discord, right-click the channel, choose "Copy Channel ID".
+
+---
+
+##### `hostname`<sup>Required</sup> <a name="hostname" id="cdk-valheim-discord.ReadyNotifierProps.property.hostname"></a>
+
+```typescript
+public readonly hostname: string;
+```
+
+- *Type:* string
+
+Public hostname used for the A2S probe and the "Connect:" string in the ready message.
+
+---
+
+##### `service`<sup>Required</sup> <a name="service" id="cdk-valheim-discord.ReadyNotifierProps.property.service"></a>
+
+```typescript
+public readonly service: FargateService;
+```
+
+- *Type:* aws-cdk-lib.aws_ecs.FargateService
+
+The Valheim Fargate service whose task start events we watch.
+
+---
+
+##### `pollInterval`<sup>Optional</sup> <a name="pollInterval" id="cdk-valheim-discord.ReadyNotifierProps.property.pollInterval"></a>
+
+```typescript
+public readonly pollInterval: Duration;
+```
+
+- *Type:* aws-cdk-lib.Duration
+- *Default:* Duration.seconds(15)
+
+How often the Lambda probes A2S while waiting.
+
+---
+
+##### `readyTimeout`<sup>Optional</sup> <a name="readyTimeout" id="cdk-valheim-discord.ReadyNotifierProps.property.readyTimeout"></a>
+
+```typescript
+public readonly readyTimeout: Duration;
+```
+
+- *Type:* aws-cdk-lib.Duration
+- *Default:* Duration.minutes(5)
+
+Total time to wait for A2S to answer before giving up and posting a warning.
+
+Must be <= the Lambda's timeout.
+
+---
+
+##### `valheimQueryPort`<sup>Optional</sup> <a name="valheimQueryPort" id="cdk-valheim-discord.ReadyNotifierProps.property.valheimQueryPort"></a>
+
+```typescript
+public readonly valheimQueryPort: number;
+```
+
+- *Type:* number
+- *Default:* 2457
+
+UDP port used for A2S probes.
 
 ---
 
