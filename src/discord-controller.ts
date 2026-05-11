@@ -56,6 +56,14 @@ export interface DiscordValheimControllerProps {
    * @default 2456
    */
   readonly valheimPort?: number;
+
+  /**
+   * Valheim Steam A2S query port. `/vh status` probes this port to confirm
+   * the game engine has finished loading the world before reporting ONLINE.
+   *
+   * @default 2457
+   */
+  readonly valheimQueryPort?: number;
 }
 
 /**
@@ -111,6 +119,7 @@ export class DiscordValheimController extends Construct {
         START_DESIRED_COUNT: startDesiredCount.toString(),
         VALHEIM_HOSTNAME: props.valheimHostname ?? '',
         VALHEIM_PORT: (props.valheimPort ?? 2456).toString(),
+        VALHEIM_QUERY_PORT: (props.valheimQueryPort ?? 2457).toString(),
       },
     });
 

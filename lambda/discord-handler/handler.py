@@ -16,6 +16,7 @@ import base64
 import json
 import logging
 import os
+import socket
 from datetime import datetime, timezone
 
 import boto3
@@ -27,10 +28,21 @@ ECS_CLUSTER_ARN = os.environ["ECS_CLUSTER_ARN"]
 ECS_SERVICE_NAME = os.environ["ECS_SERVICE_NAME"]
 START_DESIRED_COUNT = int(os.environ.get("START_DESIRED_COUNT", "1"))
 # Public hostname players connect to (e.g. "valheim.chipsgaming.click").
-# Used to build the connect string shown in /vh status replies.
+# Used to build the connect string shown in /vh status replies and as the A2S probe target.
 VALHEIM_HOSTNAME = os.environ.get("VALHEIM_HOSTNAME", "")
 # Valheim default game port. 2456 UDP is the join port; query is 2457.
 VALHEIM_PORT = int(os.environ.get("VALHEIM_PORT", "2456"))
+VALHEIM_QUERY_PORT = int(os.environ.get("VALHEIM_QUERY_PORT", "2457"))
+# A2S probe must complete well within Discord's 3s interaction response window.
+A2S_TIMEOUT_SECONDS = float(os.environ.get("A2S_TIMEOUT_SECONDS", "1.5"))
+
+# A2S protocol constants — used to probe whether Valheim is actually listening
+# yet, since ECS "RUNNING" just means the container started, not that Valheim
+# has finished loading the world and opened the game port.
+A2S_INFO_REQUEST = b"\xff\xff\xff\xff\x54Source Engine Query\x00"
+A2S_HEADER = b"\xff\xff\xff\xff"
+A2S_CHALLENGE_RESPONSE = 0x41  # 'A' — server requires challenge/response
+A2S_INFO_RESPONSE = 0x49       # 'I' — actual info payload
 
 # Discord interaction types
 PING = 1
@@ -109,6 +121,48 @@ def _connect_string() -> str:
     return f" Connect: `{VALHEIM_HOSTNAME}:{VALHEIM_PORT}`"
 
 
+def _probe_player_count() -> int | None:
+    """
+    Send A2S_INFO to the server and return the player count.
+
+    Returns None if the probe is inconclusive (timeout, parse error, or
+    Valheim not yet listening). A None result from _status() callers means
+    "server is booting, not yet ready for players".
+    """
+    if not VALHEIM_HOSTNAME:
+        return None
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(A2S_TIMEOUT_SECONDS)
+    try:
+        sock.sendto(A2S_INFO_REQUEST, (VALHEIM_HOSTNAME, VALHEIM_QUERY_PORT))
+        data, _ = sock.recvfrom(1400)
+
+        # Challenge-response: modern Source servers respond with a 4-byte
+        # challenge on the first request that must be echoed back.
+        if len(data) >= 9 and data[:4] == A2S_HEADER and data[4] == A2S_CHALLENGE_RESPONSE:
+            challenge = data[5:9]
+            sock.sendto(A2S_INFO_REQUEST + challenge, (VALHEIM_HOSTNAME, VALHEIM_QUERY_PORT))
+            data, _ = sock.recvfrom(1400)
+
+        if len(data) < 6 or data[:4] != A2S_HEADER or data[4] != A2S_INFO_RESPONSE:
+            return None
+
+        # Skip 4-byte header + 1-byte response type + 1-byte protocol version.
+        pos = 6
+        # Server name, map, folder, game — four null-terminated c-strings.
+        for _ in range(4):
+            end = data.index(b"\x00", pos)
+            pos = end + 1
+        # Skip 2-byte appid (little-endian short).
+        pos += 2
+        # Next byte is the player count.
+        return data[pos]
+    except (socket.timeout, OSError, ValueError, IndexError):
+        return None
+    finally:
+        sock.close()
+
+
 def _status() -> str:
     resp = _ecs.describe_services(
         cluster=ECS_CLUSTER_ARN,
@@ -118,13 +172,29 @@ def _status() -> str:
     desired = svc["desiredCount"]
     running = svc["runningCount"]
     pending = svc["pendingCount"]
+
     if desired == 0 and running == 0:
         return "🛑 Server is OFF. Use `/vh start` to bring it up."
-    if running == desired and pending == 0:
-        uptime_s = _running_task_uptime_seconds()
-        uptime_str = f" — up {_format_uptime(uptime_s)}" if uptime_s is not None else ""
-        return f"✅ Server is ONLINE{uptime_str}.{_connect_string()}"
-    return f"⏳ Server is transitioning — desired: {desired}, running: {running}, pending: {pending}."
+    if desired == 0 and running > 0:
+        return "🔴 Shutting down — saving game progress."
+    if running < desired or pending > 0:
+        return "⏳ Starting up — container is coming up. Try `/vh status` again in ~60s."
+
+    # ECS says the task is running; probe whether Valheim itself is listening.
+    uptime_s = _running_task_uptime_seconds()
+    uptime_str = f" — up {_format_uptime(uptime_s)}" if uptime_s is not None else ""
+    players = _probe_player_count()
+    if players is None:
+        return (
+            "⏳ Starting up — game engine is loading the world. "
+            "Try `/vh status` again in ~30–60s."
+        )
+    player_str = (
+        " No players online." if players == 0
+        else f" {players} player online." if players == 1
+        else f" {players} players online."
+    )
+    return f"✅ Server is ONLINE{uptime_str}.{player_str}{_connect_string()}"
 
 
 def _start() -> str:
