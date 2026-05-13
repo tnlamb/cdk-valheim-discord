@@ -46,6 +46,7 @@ interface ValheimDiscordStackProps extends StackProps {
   readonly subdomain: string;
   readonly discordBotToken: string;
   readonly discordChannelId: string;
+  readonly adminSteamIds: string[];
 }
 
 class ValheimDiscordStack extends Stack {
@@ -65,6 +66,7 @@ class ValheimDiscordStack extends Stack {
         // lloesche/valheim-server internals:
         BACKUPS: 'false', // we use AWS Backup on EFS instead of in-container backups
         UPDATE_CRON: '', // disable in-container update cron; let lloesche's startup handle it
+        ADMINLIST_IDS: props.adminSteamIds.join(' '), // space-separated SteamID64s; rewritten into /config/adminlist.txt on boot
       },
     });
 
@@ -139,5 +141,10 @@ new ValheimDiscordStack(app, 'ValheimDiscordStack', {
   subdomain: process.env.SUBDOMAIN ?? 'valheim',
   discordBotToken: requireEnv('DISCORD_BOT_TOKEN'),
   discordChannelId: requireEnv('DISCORD_CHANNEL_ID'),
+  // Space-separated SteamID64s granted in-game admin (ban/kick/save/etc.).
+  // Rewritten into /config/adminlist.txt on every container boot.
+  adminSteamIds: (process.env.ADMIN_STEAM_IDS ?? '76561198041381662')
+    .split(/\s+/)
+    .filter(Boolean),
 });
 app.synth();
