@@ -36,6 +36,15 @@ VALHEIM_QUERY_PORT = int(os.environ.get("VALHEIM_QUERY_PORT", "2457"))
 # A2S probe must complete well within Discord's 3s interaction response window.
 A2S_TIMEOUT_SECONDS = float(os.environ.get("A2S_TIMEOUT_SECONDS", "1.5"))
 
+# Snapshot/rollback configuration
+SNAPSHOT_BUCKET = os.environ.get("SNAPSHOT_BUCKET", "")
+SNAPSHOT_PREFIX = os.environ.get("SNAPSHOT_PREFIX", "snapshots/")
+WORLD_NAME = os.environ.get("WORLD_NAME", "Valhalla")
+# Import task configuration for rollback
+IMPORT_TASK_FAMILY = os.environ.get("IMPORT_TASK_FAMILY", "valheim-save-import")
+IMPORT_SUBNET = os.environ.get("IMPORT_SUBNET", "")
+IMPORT_SECURITY_GROUP = os.environ.get("IMPORT_SECURITY_GROUP", "")
+
 # A2S protocol constants — used to probe whether Valheim is actually listening
 # yet, since ECS "RUNNING" just means the container started, not that Valheim
 # has finished loading the world and opened the game port.
@@ -51,12 +60,14 @@ APPLICATION_COMMAND = 2
 # Discord interaction response types
 PONG = 1
 CHANNEL_MESSAGE_WITH_SOURCE = 4
+DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE = 5
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 _verify_key = VerifyKey(bytes.fromhex(APPLICATION_PUBLIC_KEY))
 _ecs = boto3.client("ecs")
+_s3 = boto3.client("s3")
 
 
 def _verify_signature(raw_body: str, signature: str, timestamp: str) -> bool:
@@ -218,12 +229,117 @@ def _stop() -> str:
     return "🔴 Stopping the server. Game progress has been saved."
 
 
+def _list_snapshots() -> list[dict]:
+    """List snapshot .db files from S3, return sorted newest-first with epoch and size."""
+    if not SNAPSHOT_BUCKET:
+        return []
+    resp = _s3.list_objects_v2(
+        Bucket=SNAPSHOT_BUCKET,
+        Prefix=SNAPSHOT_PREFIX,
+    )
+    snapshots = []
+    for obj in resp.get("Contents", []):
+        key = obj["Key"]
+        if not key.endswith(f"_{WORLD_NAME}.db"):
+            continue
+        filename = key.split("/")[-1]
+        epoch_str = filename.split("_")[0]
+        try:
+            epoch = int(epoch_str)
+        except ValueError:
+            continue
+        snapshots.append({"epoch": epoch, "size_mb": round(obj["Size"] / 1048576, 1), "key": key})
+    snapshots.sort(key=lambda s: s["epoch"], reverse=True)
+    return snapshots
+
+
+def _rollback_list() -> str:
+    """Show available snapshots with Discord timestamps."""
+    if not SNAPSHOT_BUCKET:
+        return "⚠️ Snapshot bucket not configured."
+    snapshots = _list_snapshots()
+    if not snapshots:
+        return "⚠️ No snapshots found. The server needs to run and autosave at least once."
+    lines = ["🔄 **Available saves to restore:**\n"]
+    for i, snap in enumerate(snapshots):
+        lines.append(f"{i+1}. <t:{snap['epoch']}:f> (<t:{snap['epoch']}:R>) — {snap['size_mb']} MiB")
+    lines.append(f"\nTo restore, run: `/vh rollback` with target `<number>`\ne.g. `/vh rollback` target: `1` for the most recent")
+    return "\n".join(lines)
+
+
+def _rollback_restore(choice_str: str) -> str:
+    """Restore a specific snapshot by index (1-based) or epoch."""
+    if not SNAPSHOT_BUCKET:
+        return "⚠️ Snapshot bucket not configured."
+    snapshots = _list_snapshots()
+    if not snapshots:
+        return "⚠️ No snapshots found."
+
+    # Accept 1-based index or raw epoch
+    try:
+        choice_int = int(choice_str)
+    except ValueError:
+        return f"⚠️ Invalid choice `{choice_str}`. Use a number (1–{len(snapshots)})."
+
+    if 1 <= choice_int <= len(snapshots):
+        snap = snapshots[choice_int - 1]
+    else:
+        # Try as raw epoch
+        snap = next((s for s in snapshots if s["epoch"] == choice_int), None)
+        if not snap:
+            return f"⚠️ No snapshot found for `{choice_str}`. Run `/vh rollback` to see options."
+
+    # Copy selected snapshot to the import prefix (worlds_local/) so the import task picks it up
+    db_key = snap["key"]
+    fwl_key = db_key.replace(".db", ".fwl")
+    _s3.copy_object(
+        Bucket=SNAPSHOT_BUCKET,
+        CopySource={"Bucket": SNAPSHOT_BUCKET, "Key": db_key},
+        Key=f"worlds_local/{WORLD_NAME}.db",
+    )
+    _s3.copy_object(
+        Bucket=SNAPSHOT_BUCKET,
+        CopySource={"Bucket": SNAPSHOT_BUCKET, "Key": fwl_key},
+        Key=f"worlds_local/{WORLD_NAME}.fwl",
+    )
+
+    # Stop the server (SIGTERM → server flushes final save → exits within 60s)
+    _ecs.update_service(
+        cluster=ECS_CLUSTER_ARN,
+        service=ECS_SERVICE_NAME,
+        desiredCount=0,
+    )
+
+    # Invoke ourselves asynchronously to wait for stop, run import, wait for
+    # import completion, then restart. This avoids Discord's 3s response timeout.
+    _lambda = boto3.client("lambda")
+    _lambda.invoke(
+        FunctionName=os.environ["AWS_LAMBDA_FUNCTION_NAME"],
+        InvocationType="Event",  # async fire-and-forget
+        Payload=json.dumps({
+            "_rollback_async": True,
+            "snapshot_epoch": snap["epoch"],
+        }).encode(),
+    )
+
+    return (
+        f"🔄 Restoring save from <t:{snap['epoch']}:f> (<t:{snap['epoch']}:R>).\n"
+        "Server is stopping → importing save → restarting.\n"
+        "The ReadyNotifier will ping when the server is back online."
+    )
+
+
 def _dispatch(interaction: dict) -> dict:
     data = interaction.get("data") or {}
     options = data.get("options") or []
     if not options:
-        return _reply("Usage: `/vh <status|start|stop>`")
-    choice = (options[0].get("value") or "").lower()
+        return _reply("Usage: `/vh <status|start|stop|rollback>`")
+
+    # Parse options: {name: value} map
+    opts = {o["name"]: o.get("value", "") for o in options}
+    choice = opts.get("action", "").lower()
+    target = opts.get("target", "").strip()
+
     try:
         if choice == "status":
             return _reply(_status())
@@ -231,10 +347,81 @@ def _dispatch(interaction: dict) -> dict:
             return _reply(_start())
         if choice == "stop":
             return _reply(_stop())
-        return _reply(f"Unknown sub-command `{choice}`. Use status, start, or stop.")
+        if choice == "rollback":
+            if not target:
+                return _reply(_rollback_list())
+            return _reply(_rollback_restore(target))
+        return _reply(f"Unknown sub-command `{choice}`. Use status, start, stop, or rollback.")
     except Exception as exc:  # noqa: BLE001 — surface error back to user
         logger.exception("Dispatch failed for choice=%s", choice)
         return _reply(f"⚠️ Command failed: `{type(exc).__name__}`. Check CloudWatch logs.")
+
+
+def _rollback_async(event: dict) -> None:
+    """
+    Async rollback orchestration (invoked via Lambda Event invocation).
+    Waits for server stop, runs import, waits for import completion, then restarts.
+    """
+    import time
+
+    logger.info("Rollback async started for epoch %s", event.get("snapshot_epoch"))
+
+    # 1. Wait for server tasks to stop (up to 2 min)
+    for _ in range(24):
+        time.sleep(5)
+        running = _ecs.list_tasks(
+            cluster=ECS_CLUSTER_ARN,
+            serviceName=ECS_SERVICE_NAME,
+            desiredStatus="RUNNING",
+        ).get("taskArns", [])
+        if not running:
+            break
+    else:
+        logger.error("Server did not stop within 2 minutes, proceeding anyway")
+
+    # 2. Run the import task
+    import_task_arn = None
+    if IMPORT_SUBNET and IMPORT_SECURITY_GROUP:
+        run_resp = _ecs.run_task(
+            cluster=ECS_CLUSTER_ARN,
+            taskDefinition=IMPORT_TASK_FAMILY,
+            launchType="FARGATE",
+            networkConfiguration={
+                "awsvpcConfiguration": {
+                    "subnets": [IMPORT_SUBNET],
+                    "securityGroups": [IMPORT_SECURITY_GROUP],
+                    "assignPublicIp": "ENABLED",
+                }
+            },
+        )
+        tasks = run_resp.get("tasks", [])
+        if tasks:
+            import_task_arn = tasks[0]["taskArn"]
+
+    # 3. Wait for import task to complete (up to 5 min)
+    if import_task_arn:
+        for _ in range(60):
+            time.sleep(5)
+            desc = _ecs.describe_tasks(cluster=ECS_CLUSTER_ARN, tasks=[import_task_arn])
+            task = desc.get("tasks", [{}])[0]
+            if task.get("lastStatus") == "STOPPED":
+                containers = task.get("containers", [])
+                exit_code = containers[0].get("exitCode", -1) if containers else -1
+                if exit_code != 0:
+                    logger.error("Import task failed with exit code %d", exit_code)
+                    return
+                break
+        else:
+            logger.error("Import task timed out after 5 minutes")
+            return
+
+    # 4. Restart the server
+    _ecs.update_service(
+        cluster=ECS_CLUSTER_ARN,
+        service=ECS_SERVICE_NAME,
+        desiredCount=START_DESIRED_COUNT,
+    )
+    logger.info("Rollback complete, server restarting")
 
 
 def handler(event, _context):
@@ -245,6 +432,10 @@ def handler(event, _context):
     We must verify against those exact bytes — do NOT parse-then-re-serialize
     the body (key order and whitespace won't match, and verification fails).
     """
+    # Async self-invocation for rollback orchestration
+    if event.get("_rollback_async"):
+        return _rollback_async(event)
+
     logger.info("Event keys: %s", list(event.keys()))
     headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
     raw_body = event.get("body") or ""

@@ -4,6 +4,7 @@ import {
   aws_ecs as ecs,
   aws_events as events,
   aws_events_targets as targets,
+  aws_iam as iam,
   aws_lambda as lambda,
   aws_logs as logs,
 } from 'aws-cdk-lib';
@@ -88,7 +89,7 @@ export class ReadyNotifier extends Construct {
     this.handler = new lambda.Function(this, 'Handler', {
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'handler.handler',
-      // Pure stdlib — no bundling needed.
+      // Pure stdlib + boto3 (included in Lambda runtime) — no bundling needed.
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'ready-notifier')),
       // Lambda must outlive the readiness poll loop; add a small buffer.
       timeout: Duration.seconds(readyTimeout.toSeconds() + 30),
@@ -103,6 +104,15 @@ export class ReadyNotifier extends Construct {
         POLL_INTERVAL_SECONDS: pollInterval.toSeconds().toString(),
       },
     });
+
+    // Allow the Lambda to list tasks in the cluster for deployment detection
+    this.handler.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['ecs:ListTasks'],
+      resources: ['*'],
+      conditions: {
+        ArnEquals: { 'ecs:cluster': props.service.cluster.clusterArn },
+      },
+    }));
 
     // Fire on every ECS task state change where the task is a member of our
     // Fargate service AND the new lastStatus is RUNNING. The `group` field is

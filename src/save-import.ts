@@ -18,6 +18,11 @@ export interface SaveImportProps {
   readonly fileSystem: efs.FileSystem;
 
   /**
+   * Existing S3 bucket to use for imports. If not provided, a new bucket is created.
+   */
+  readonly bucket?: s3.IBucket;
+
+  /**
    * Path inside the container where EFS is mounted.
    *
    * @default '/config'
@@ -50,6 +55,8 @@ export interface SaveImportProps {
 export class SaveImport extends Construct {
   public readonly bucket: s3.Bucket;
   public readonly taskDefinition: ecs.FargateTaskDefinition;
+  public readonly securityGroup: ec2.SecurityGroup;
+  public readonly subnetId: string;
 
   constructor(scope: Construct, id: string, props: SaveImportProps) {
     super(scope, id);
@@ -57,7 +64,7 @@ export class SaveImport extends Construct {
     const containerPath = props.containerPath ?? '/config';
     const s3Prefix = props.s3Prefix ?? 'worlds_local/';
 
-    this.bucket = new s3.Bucket(this, 'ImportBucket', {
+    this.bucket = props.bucket as s3.Bucket ?? new s3.Bucket(this, 'ImportBucket', {
       versioned: false,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       encryption: s3.BucketEncryption.S3_MANAGED,
@@ -122,9 +129,12 @@ export class SaveImport extends Construct {
       allowAllOutbound: true,
     });
     props.fileSystem.connections.allowDefaultPortFrom(importSg);
+    this.securityGroup = importSg;
+
+    const publicSubnetIds = props.cluster.vpc.publicSubnets.map((s) => s.subnetId);
+    this.subnetId = publicSubnetIds[0] ?? '';
 
     const region = Stack.of(this).region;
-    const publicSubnetIds = props.cluster.vpc.publicSubnets.map((s) => s.subnetId);
 
     new CfnOutput(this, 'ImportBucketName', {
       description: 'S3 bucket — upload world files under the "worlds_local/" prefix here',

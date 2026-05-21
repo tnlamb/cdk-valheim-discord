@@ -6,8 +6,8 @@ Triggered by an EventBridge rule when a Valheim Fargate task reaches
 answers (meaning the world has finished loading and the game port is open),
 then posts a ready message to a Discord channel using a bot token.
 
-Fires once per task start. If A2S never answers within READY_TIMEOUT_SECONDS
-the Lambda posts a warning so users are still informed something is wrong.
+Fires once per task start. Skips rolling deployments by checking if another
+task was already RUNNING in the service (cold starts go from 0 → 1 tasks).
 """
 import json
 import logging
@@ -16,6 +16,8 @@ import socket
 import time
 import urllib.error
 import urllib.request
+
+import boto3
 
 DISCORD_BOT_TOKEN = os.environ["DISCORD_BOT_TOKEN"]
 DISCORD_CHANNEL_ID = os.environ["DISCORD_CHANNEL_ID"]
@@ -85,12 +87,29 @@ def handler(event, _context):
     EventBridge delivers an ECS Task State Change event here. We only care about
     tasks reaching `lastStatus=RUNNING` — the rule already filters to that, but
     we double-check in case of unexpected deliveries.
+
+    To avoid spurious notifications during rolling deployments, we check if
+    multiple tasks are RUNNING in the service. A user-initiated start goes from
+    0 → 1 tasks; a deployment briefly has 2 tasks running.
     """
     logger.info("Received event: %s", json.dumps(event)[:500])
     detail = event.get("detail") or {}
     if detail.get("lastStatus") != "RUNNING":
         logger.info("Ignoring event: lastStatus=%s", detail.get("lastStatus"))
         return {"action": "noop", "reason": "not_running"}
+
+    # Check if this is a rolling deployment (multiple tasks running)
+    cluster_arn = detail.get("clusterArn", "")
+    service_name = detail.get("group", "").removeprefix("service:")
+    if cluster_arn and service_name:
+        ecs = boto3.client("ecs")
+        running_tasks = ecs.list_tasks(
+            cluster=cluster_arn, serviceName=service_name, desiredStatus="RUNNING"
+        )
+        task_count = len(running_tasks.get("taskArns", []))
+        if task_count > 1:
+            logger.info("Skipping notification: %d tasks running (rolling deployment)", task_count)
+            return {"action": "skipped", "reason": "rolling_deployment", "task_count": task_count}
 
     deadline = time.monotonic() + READY_TIMEOUT_SECONDS
     attempts = 0

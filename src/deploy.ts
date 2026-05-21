@@ -28,6 +28,7 @@ import {
   StackProps,
   Duration,
   aws_route53 as route53,
+  aws_s3 as s3,
 } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import { DiscordValheimController } from './discord-controller';
@@ -53,6 +54,17 @@ class ValheimDiscordStack extends Stack {
   constructor(scope: Construct, id: string, props: ValheimDiscordStackProps) {
     super(scope, id, props);
 
+    // Shared S3 bucket for save imports and snapshot storage.
+    const saveBucket = new s3.Bucket(this, 'SaveBucket', {
+      versioned: false,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      lifecycleRules: [
+        { id: 'expire-imports', enabled: true, expiration: Duration.days(30) },
+      ],
+    });
+
     // 1) Valheim server (Fargate + EFS + backup), scaled to 0 by default —
     //    Discord controls start/stop. No cron schedules (Discord is the source of truth).
     const valheim = new ValheimWorld(this, 'ValheimWorld', {
@@ -68,18 +80,32 @@ class ValheimDiscordStack extends Stack {
         UPDATE_CRON: '', // disable in-container update cron; let lloesche's startup handle it
         ADMINLIST_IDS: props.adminSteamIds.join(' '), // space-separated SteamID64s; rewritten into /config/adminlist.txt on boot
       },
+      snapshotBucket: saveBucket,
+      worldFileName: props.worldName,
     });
 
-    // 2) Discord slash command controller.
+    // 2) Save-file import helper — creates the import task, security group, and
+    //    subnet config needed by both manual imports and the /vh rollback command.
+    const saveImport = new SaveImport(this, 'SaveImport', {
+      cluster: valheim.service.cluster,
+      fileSystem: valheim.fileSystem,
+      bucket: saveBucket,
+    });
+
+    // 3) Discord slash command controller.
     new DiscordValheimController(this, 'DiscordController', {
       service: valheim.service,
       applicationPublicKey: props.applicationPublicKey,
       startDesiredCount: 1,
-      lambdaTimeout: Duration.seconds(10),
+      lambdaTimeout: Duration.seconds(450),
       valheimHostname: `${props.subdomain}.${props.domainName}`,
+      snapshotBucket: saveBucket,
+      worldName: props.worldName,
+      importSubnet: saveImport.subnetId,
+      importSecurityGroup: saveImport.securityGroup.securityGroupId,
     });
 
-    // 3) Route53 dynamic DNS updater.
+    // 4) Route53 dynamic DNS updater.
     //    The hosted zone must already exist (auto-created on domain registration).
     const hostedZone = route53.HostedZone.fromLookup(this, 'HostedZone', {
       domainName: props.domainName,
@@ -89,14 +115,6 @@ class ValheimDiscordStack extends Stack {
       hostedZone,
       recordName: props.subdomain,
       ttl: Duration.seconds(30),
-    });
-
-    // 4) Save-file import helper — reusable way to restore a world from S3 -> EFS.
-    //    Upload files to the output bucket under worlds_local/, then trigger the
-    //    task using the CFN-output run-task command.
-    new SaveImport(this, 'SaveImport', {
-      cluster: valheim.service.cluster,
-      fileSystem: valheim.fileSystem,
     });
 
     // 5) Auto-stop when idle. Polls the server's Steam A2S query port every

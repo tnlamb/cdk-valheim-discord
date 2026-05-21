@@ -2,11 +2,14 @@ import * as path from 'path';
 import {
   Duration,
   CfnOutput,
+  Stack,
+  ArnFormat,
   aws_apigateway as apigateway,
   aws_ecs as ecs,
   aws_iam as iam,
   aws_lambda as lambda,
   aws_logs as logs,
+  aws_s3 as s3,
 } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 
@@ -64,6 +67,28 @@ export interface DiscordValheimControllerProps {
    * @default 2457
    */
   readonly valheimQueryPort?: number;
+
+  /**
+   * S3 bucket containing snapshots and import files. Required for /vh rollback.
+   */
+  readonly snapshotBucket?: s3.IBucket;
+
+  /**
+   * World file name (without extension) for rollback.
+   *
+   * @default 'Valhalla'
+   */
+  readonly worldName?: string;
+
+  /**
+   * Subnet ID for the import task (must have EFS access).
+   */
+  readonly importSubnet?: string;
+
+  /**
+   * Security group ID for the import task (must allow NFS to EFS).
+   */
+  readonly importSecurityGroup?: string;
 }
 
 /**
@@ -120,6 +145,11 @@ export class DiscordValheimController extends Construct {
         VALHEIM_HOSTNAME: props.valheimHostname ?? '',
         VALHEIM_PORT: (props.valheimPort ?? 2456).toString(),
         VALHEIM_QUERY_PORT: (props.valheimQueryPort ?? 2457).toString(),
+        SNAPSHOT_BUCKET: props.snapshotBucket?.bucketName ?? '',
+        WORLD_NAME: props.worldName ?? 'Valhalla',
+        IMPORT_TASK_FAMILY: 'valheim-save-import',
+        IMPORT_SUBNET: props.importSubnet ?? '',
+        IMPORT_SECURITY_GROUP: props.importSecurityGroup ?? '',
       },
     });
 
@@ -137,6 +167,42 @@ export class DiscordValheimController extends Construct {
       conditions: {
         ArnEquals: { 'ecs:cluster': service.cluster.clusterArn },
       },
+    }));
+
+    // RunTask for the save-import task (rollback flow).
+    this.handler.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['ecs:RunTask'],
+      resources: ['*'],
+      conditions: {
+        ArnEquals: { 'ecs:cluster': service.cluster.clusterArn },
+      },
+    }));
+
+    // The import task needs iam:PassRole to assume its task role.
+    this.handler.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['iam:PassRole'],
+      resources: ['*'],
+      conditions: {
+        StringLike: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' },
+      },
+    }));
+
+    // S3 access for listing/copying snapshots during rollback.
+    if (props.snapshotBucket) {
+      props.snapshotBucket.grantReadWrite(this.handler);
+    }
+
+    // Allow Lambda to invoke itself asynchronously for rollback orchestration.
+    // Cannot use grantInvoke(this.handler) — creates a CFN circular dependency
+    // (Lambda → API GW integration → Lambda ARN → policy → Lambda).
+    this.handler.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['lambda:InvokeFunction'],
+      resources: [Stack.of(this).formatArn({
+        service: 'lambda',
+        resource: 'function',
+        resourceName: '*',
+        arnFormat: ArnFormat.COLON_RESOURCE_NAME,
+      })],
     }));
 
     // API Gateway REST API using Lambda Proxy integration. Discord signs the

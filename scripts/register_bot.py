@@ -50,8 +50,15 @@ command = {
                 {"name": "status", "value": "status"},
                 {"name": "start", "value": "start"},
                 {"name": "stop", "value": "stop"},
+                {"name": "rollback", "value": "rollback"},
             ],
-        }
+        },
+        {
+            "name": "target",
+            "description": "For rollback: save number (1-3) from /vh rollback list",
+            "type": 3,
+            "required": False,
+        },
     ],
 }
 

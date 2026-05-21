@@ -8,6 +8,7 @@ import {
   aws_efs as efs,
   aws_events as events,
   aws_logs as logs,
+  aws_s3 as s3,
 } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 
@@ -139,6 +140,27 @@ export interface ValheimWorldProps {
    * @default - Always running.
    */
   readonly schedules?: ValheimWorldScalingScheduleProps[];
+
+  /**
+   * S3 bucket for save snapshots. When provided, a sidecar container is added
+   * that watches for autosave writes and uploads snapshots to s3://<bucket>/snapshots/.
+   * Keeps the most recent N snapshots (pruning older ones).
+   */
+  readonly snapshotBucket?: s3.IBucket;
+
+  /**
+   * Number of snapshots to retain in S3.
+   *
+   * @default 3
+   */
+  readonly snapshotRetention?: number;
+
+  /**
+   * World file name (without extension) to watch for autosave writes.
+   *
+   * @default 'Valhalla'
+   */
+  readonly worldFileName?: string;
 }
 
 /**
@@ -304,6 +326,58 @@ export class ValheimWorld extends Construct {
         readOnly: false,
       },
     );
+
+    // Snapshot sidecar: polls for autosave writes and uploads to S3.
+    // Uses mtime polling because inotifywait doesn't work on EFS (NFS).
+    if (props?.snapshotBucket) {
+      const worldFile = props.worldFileName ?? 'Valhalla';
+      const keep = props.snapshotRetention ?? 3;
+      const snapshotScript = [
+        '#!/bin/sh',
+        'apk add --no-cache aws-cli',
+        `BUCKET="${props.snapshotBucket.bucketName}"`,
+        'PREFIX="snapshots"',
+        'WORLD_DIR="/config/worlds_local"',
+        `KEEP=${keep}`,
+        'LAST_MTIME=""',
+        '',
+        'echo "Polling $WORLD_DIR/${worldFile}.db for changes every 60s"',
+        'while true; do',
+        `  MTIME=$(stat -c %Y "$WORLD_DIR/${worldFile}.db" 2>/dev/null || echo "")`,
+        '  if [ -n "$MTIME" ] && [ -n "$LAST_MTIME" ] && [ "$MTIME" != "$LAST_MTIME" ]; then',
+        '    EPOCH=$(date +%s)',
+        '    echo "Save detected (mtime $LAST_MTIME -> $MTIME), uploading snapshot $EPOCH"',
+        `    aws s3 cp "$WORLD_DIR/${worldFile}.db" "s3://$BUCKET/$PREFIX/\${EPOCH}_${worldFile}.db"`,
+        `    aws s3 cp "$WORLD_DIR/${worldFile}.fwl" "s3://$BUCKET/$PREFIX/\${EPOCH}_${worldFile}.fwl"`,
+        `    aws s3 ls "s3://$BUCKET/$PREFIX/" | grep "_${worldFile}.db" | sort | head -n -$KEEP | awk '{print $4}' | while read f; do`,
+        '      aws s3 rm "s3://$BUCKET/$PREFIX/$f"',
+        '      aws s3 rm "s3://$BUCKET/$PREFIX/${f%.db}.fwl"',
+        '    done',
+        '  fi',
+        '  LAST_MTIME="$MTIME"',
+        '  sleep 60',
+        'done',
+      ].join('\n');
+
+      const sidecar = taskDefinition.addContainer('SnapshotSidecar', {
+        image: ecs.ContainerImage.fromRegistry('alpine:3.20'),
+        entryPoint: ['/bin/sh', '-c'],
+        command: [snapshotScript],
+        logging: new ecs.AwsLogDriver({
+          streamPrefix: 'snapshot-sidecar',
+          logRetention: logs.RetentionDays.THREE_DAYS,
+        }),
+        essential: false, // don't kill the server if the sidecar crashes
+      });
+
+      sidecar.addMountPoints({
+        containerPath: '/config/',
+        sourceVolume: volumeConfig.name,
+        readOnly: true,
+      });
+
+      props.snapshotBucket.grantReadWrite(taskDefinition.taskRole);
+    }
 
     this.service = new ecs.FargateService(this, 'ValheimService', {
       cluster,
