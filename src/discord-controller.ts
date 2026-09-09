@@ -76,7 +76,7 @@ export interface DiscordValheimControllerProps {
   /**
    * World file name (without extension) for rollback.
    *
-   * @default 'Valhalla'
+   * @default 'Alfheim'
    */
   readonly worldName?: string;
 
@@ -146,7 +146,7 @@ export class DiscordValheimController extends Construct {
         VALHEIM_PORT: (props.valheimPort ?? 2456).toString(),
         VALHEIM_QUERY_PORT: (props.valheimQueryPort ?? 2457).toString(),
         SNAPSHOT_BUCKET: props.snapshotBucket?.bucketName ?? '',
-        WORLD_NAME: props.worldName ?? 'Valhalla',
+        WORLD_NAME: props.worldName ?? 'Alfheim',
         IMPORT_TASK_FAMILY: 'valheim-save-import',
         IMPORT_SUBNET: props.importSubnet ?? '',
         IMPORT_SECURITY_GROUP: props.importSecurityGroup ?? '',
