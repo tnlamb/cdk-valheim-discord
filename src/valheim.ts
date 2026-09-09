@@ -158,7 +158,7 @@ export interface ValheimWorldProps {
   /**
    * World file name (without extension) to watch for autosave writes.
    *
-   * @default 'Valhalla'
+   * @default 'Alfheim'
    */
   readonly worldFileName?: string;
 }
@@ -330,7 +330,7 @@ export class ValheimWorld extends Construct {
     // Snapshot sidecar: polls for autosave writes and uploads to S3.
     // Uses mtime polling because inotifywait doesn't work on EFS (NFS).
     if (props?.snapshotBucket) {
-      const worldFile = props.worldFileName ?? 'Valhalla';
+      const worldFile = props.worldFileName ?? 'Alfheim';
       const keep = props.snapshotRetention ?? 3;
       const snapshotScript = [
         '#!/bin/sh',
