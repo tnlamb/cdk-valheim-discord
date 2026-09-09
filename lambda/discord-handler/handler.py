@@ -39,7 +39,7 @@ A2S_TIMEOUT_SECONDS = float(os.environ.get("A2S_TIMEOUT_SECONDS", "1.5"))
 # Snapshot/rollback configuration
 SNAPSHOT_BUCKET = os.environ.get("SNAPSHOT_BUCKET", "")
 SNAPSHOT_PREFIX = os.environ.get("SNAPSHOT_PREFIX", "snapshots/")
-WORLD_NAME = os.environ.get("WORLD_NAME", "Valhalla")
+WORLD_NAME = os.environ.get("WORLD_NAME", "Alfheim")
 # Import task configuration for rollback
 IMPORT_TASK_FAMILY = os.environ.get("IMPORT_TASK_FAMILY", "valheim-save-import")
 IMPORT_SUBNET = os.environ.get("IMPORT_SUBNET", "")
